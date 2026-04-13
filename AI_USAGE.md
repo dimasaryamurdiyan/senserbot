@@ -8,7 +8,7 @@ This document describes how AI (Claude Code) was used during the development of 
 
 AI was used as a **collaborative architect and code generator**, not as a black box. The workflow:
 
-1. **Architecture briefing first** — Before any code was written, I had the AI produce a complete architecture brief covering: layer structure, message protocol (full JSON contracts), connection lifecycle, file list, and commit plan. This gave me full visibility before implementation.
+1. **Architecture briefing first** — Before any code was written, I had the AI produce a complete architecture brief covering: layer structure, message protocol (full JSON contracts), connection lifecycle, test case, and commit plan. This gave me full visibility before implementation.
 
 2. **Plan approval** — The AI entered "plan mode" and I reviewed/iterated on the plan (added unit test plan, commit strategy, JSON contract details) before approving. No code was written until the plan was finalized.
 
@@ -51,6 +51,30 @@ override suspend fun addTask(title: String) {
     withContext(Dispatchers.IO) { wsManager.send(message) }
 }
 ```
+
+### Issue: Cleartext WebSocket blocked by Android network security policy
+
+**What happened:** The generated code used `ws://10.0.2.2:8000/ws` (plain WebSocket) but Android blocks cleartext traffic by default on API 28+. The app crashed at runtime with:
+
+```
+java.net.UnknownServiceException: CLEARTEXT communication to 10.0.2.2
+not permitted by network security policy
+```
+
+**How I identified it:** Logcat on the emulator showed the OkHttp request being rejected before it even reached the server.
+
+**Fix:** Created `res/xml/network_security_config.xml` scoped only to local dev addresses, and registered it in `AndroidManifest.xml`:
+
+```xml
+<domain-config cleartextTrafficPermitted="true">
+    <domain includeSubdomains="false">10.0.2.2</domain>
+    <domain includeSubdomains="false">localhost</domain>
+</domain-config>
+```
+
+This is intentionally scoped to dev IPs only — production would use `wss://` and this config would not be needed.
+
+---
 
 ### Issue: Python 3.9 incompatible union type syntax in `server/main.py`
 
