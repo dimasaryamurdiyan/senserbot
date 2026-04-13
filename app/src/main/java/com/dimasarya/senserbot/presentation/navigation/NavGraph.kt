@@ -5,8 +5,12 @@ import androidx.navigation.NavHostController
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
+import com.dimasarya.senserbot.presentation.task.TaskScreen
 import com.dimasarya.senserbot.presentation.user.UserScreen
 import kotlinx.serialization.Serializable
+
+@Serializable
+object TaskRoute
 
 @Serializable
 object UserRoute
@@ -17,8 +21,11 @@ fun AppNavGraph(
 ) {
     NavHost(
         navController = navController,
-        startDestination = UserRoute
+        startDestination = TaskRoute
     ) {
+        composable<TaskRoute> {
+            TaskScreen()
+        }
         composable<UserRoute> {
             UserScreen()
         }
