@@ -2,6 +2,10 @@
 
 A real-time synchronized task list Android app where two devices share and modify the same list via WebSocket.
 
+## Demo
+
+![Demo](./asset/demo.gif)
+
 ## Architecture
 
 **Clean Architecture + MVVM** with a FastAPI WebSocket backend.
