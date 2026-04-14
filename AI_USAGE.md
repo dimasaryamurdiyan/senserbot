@@ -6,6 +6,10 @@ This document describes how AI (Claude Code) was used during the development of 
 
 ## 1. Prompt Strategy
 
+### Introduction
+I used the Document Assignment as the Technical Specification Doc for whole feature. Before writing any code, I made a claude skills for better context efficiency and improved output quality.
+
+### Implementation Approach
 AI was used as a **collaborative architect and code generator**, not as a black box. The workflow:
 
 1. **Architecture briefing first** — Before any code was written, I had the AI produce a complete architecture brief covering: layer structure, message protocol (full JSON contracts), connection lifecycle, test case, and commit plan. This gave me full visibility before implementation.
