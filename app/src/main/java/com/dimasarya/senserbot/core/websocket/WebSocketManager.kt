@@ -4,6 +4,8 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.channels.BufferOverflow
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -12,22 +14,39 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.Response
 import okhttp3.WebSocket
 import okhttp3.WebSocketListener
+import java.util.concurrent.TimeUnit
 
-class WebSocketManager(private val okHttpClient: OkHttpClient) {
+class WebSocketManager(
+    okHttpClient: OkHttpClient,
+    private val url: String = DEFAULT_URL
+) {
 
     companion object {
-        const val WS_URL = "ws://10.0.2.2:8000/ws"
+        const val DEFAULT_URL = "ws://10.0.2.2:8000/ws"
         private val BACKOFF_DELAYS_MS = listOf(1_000L, 2_000L, 4_000L, 8_000L, 16_000L)
+        private const val MAX_BACKOFF_MS = 16_000L
     }
 
-    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    // Derive client with ping interval to detect silently dead connections
+    private val wsClient: OkHttpClient = okHttpClient.newBuilder()
+        .pingInterval(30, TimeUnit.SECONDS)
+        .build()
 
-    private val _messages = MutableSharedFlow<String>(extraBufferCapacity = 64)
+    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    private val connectMutex = Mutex()
+
+    // DROP_OLDEST makes the drop policy explicit instead of silently blocking
+    private val _messages = MutableSharedFlow<String>(
+        extraBufferCapacity = 64,
+        onBufferOverflow = BufferOverflow.DROP_OLDEST
+    )
     val messages: SharedFlow<String> = _messages.asSharedFlow()
 
     private val _connectionState = MutableStateFlow<ConnectionState>(ConnectionState.Disconnected)
@@ -39,7 +58,7 @@ class WebSocketManager(private val okHttpClient: OkHttpClient) {
 
     fun connect() {
         userDisconnected = false
-        openSocket()
+        scope.launch { openSocket() }
     }
 
     fun send(json: String): Boolean = webSocket?.send(json) ?: false
@@ -52,10 +71,16 @@ class WebSocketManager(private val okHttpClient: OkHttpClient) {
         _connectionState.value = ConnectionState.Disconnected
     }
 
-    private fun openSocket() {
+    // Call from Application.onTerminate() to cancel the internal coroutine scope
+    fun close() {
+        disconnect()
+        scope.cancel()
+    }
+
+    private suspend fun openSocket() = connectMutex.withLock {
         _connectionState.value = ConnectionState.Connecting
-        val request = Request.Builder().url(WS_URL).build()
-        webSocket = okHttpClient.newWebSocket(request, createListener())
+        val request = Request.Builder().url(url).build()
+        webSocket = wsClient.newWebSocket(request, createListener())
     }
 
     private fun createListener() = object : WebSocketListener() {
@@ -65,7 +90,8 @@ class WebSocketManager(private val okHttpClient: OkHttpClient) {
         }
 
         override fun onMessage(webSocket: WebSocket, text: String) {
-            scope.launch { _messages.emit(text) }
+            // tryEmit is non-blocking and thread-safe; no scope.launch needed
+            _messages.tryEmit(text)
         }
 
         override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
@@ -85,14 +111,17 @@ class WebSocketManager(private val okHttpClient: OkHttpClient) {
         if (userDisconnected) return
         reconnectJob?.cancel()
         reconnectJob = scope.launch {
-            for (delayMs in BACKOFF_DELAYS_MS) {
+            var attempt = 0
+            // Infinite retry — keeps trying at MAX_BACKOFF_MS after exhausting the list
+            while (!userDisconnected) {
+                val delayMs = BACKOFF_DELAYS_MS.getOrElse(attempt) { MAX_BACKOFF_MS }
                 _connectionState.value = ConnectionState.Reconnecting
                 delay(delayMs)
                 if (userDisconnected) return@launch
                 openSocket()
-                // Wait to see if connection succeeds before next retry
                 delay(3_000L)
                 if (_connectionState.value == ConnectionState.Connected) return@launch
+                attempt++
             }
         }
     }
